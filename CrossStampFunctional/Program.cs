@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -41,40 +42,83 @@ namespace CrossStampFunctional
                     _geoMasterCmd,
                     "DeleteWebSite {0} {1} {2}",
                     _sub, _ws, _site);
+                RunAndValidate(String.Empty,
+                    _geoMasterCmd,
+                    "DeleteWebSite {0} {1} {2}",
+                    _sub, _ws, _dummy);
                 RunAndValidate("![0]", _geoRegionCmd, "ListSiteStamps");
                 RunAndValidate("!" + _site, _geoMasterCmd, "ListWebSites {0} {1}", _sub, _ws);
                 RunAndValidate("!" + _site, _blu1Cmd, "ListWebSites {0} {1}", _sub, _ws);
                 RunAndValidate("!" + _site, _blu2Cmd, "ListWebSites {0} {1}", _sub, _ws);
 
                 // Warmup
+                RunAndValidate(String.Format("{0}.kudu1.antares-test.windows-int.net", _dummy),
+                    _geoMasterCmd,
+                    "CreateWebSite {0} {1} {2}",
+                    _sub, _ws, _dummy);
                 RunAndValidate(_dummy, _geoMasterCmd, "ListWebSites {0} {1}", _sub, _ws);
                 RunAndValidate(_dummy, _blu1Cmd, "ListWebSites {0} {1}", _sub, _ws);
                 RunAndValidate("Completed successfully", _geoRegionCmd, "ListSiteStamps");
 
-                // Create
-                RunAndValidate(String.Format("{0}.kudu1.antares-test.windows-int.net", _site), 
-                    _geoMasterCmd, 
+                // CreateFunctionSite
+                RunAndValidate(String.Format("{0}.kudu1.antares-test.windows-int.net", _site),
+                    _geoMasterCmd,
                     "CreateFunctionSite {0} {1} {2} /storageAccount:{3} /storageKey:{4}",
                     _sub, _ws, _site, _storageAccount, _storageKey);
+                RunAndValidate("SyncWebSiteTriggers Response: OK",
+                    _geoMasterCmd,
+                    "SyncWebSiteTriggers {0} {1} {2}",
+                    _sub, _ws, _site);
+                RunAndValidate("Triggers: [{\"type\":\"",
+                    _geoMasterCmd,
+                    "GetWebSiteTriggers {0} {1} {2}",
+                    _sub, _ws, _site);
+
+                // add timer, sync and check
+                AddTimerTrigger();
+                RunAndValidate("SyncWebSiteTriggers Response: OK",
+                    _geoMasterCmd,
+                    "SyncWebSiteTriggers {0} {1} {2}",
+                    _sub, _ws, _site);
+                RunAndValidate("\"type\":\"timerTrigger",
+                    _geoMasterCmd,
+                    "GetWebSiteTriggers {0} {1} {2}",
+                    _sub, _ws, _site);
 
                 // Notify full
-                RunAndValidate("Completed successfully.", 
-                    _geoRegionCmd, 
+                RunAndValidate("Completed successfully.",
+                    _geoRegionCmd,
                     "Notify {0} {1} {2} {3} {4} {5}",
                     _blu1, _full, _sub, _ws, _site, _sf);
                 RunAndValidate("StampName: blu1", _geoRegionCmd, "ListSiteStamps");
                 RunAndValidate("StampName: blu2", _geoRegionCmd, "ListSiteStamps");
                 RunAndValidate(_site, _blu2Cmd, "ListWebSites {0} {1}", _sub, _ws);
+                RunAndValidate("\"type\":\"timerTrigger",
+                    _blu2Cmd,
+                    "GetWebSiteTriggers {0} {1} {2}",
+                    _sub, _ws, _site);
 
                 // UpdateWebSiteConfig propagation
-                RunAndValidate(String.Format("Configuration for website {0} has been updated.", _site), 
-                    _geoMasterCmd, 
+                RunAndValidate(String.Format("Configuration for website {0} has been updated.", _site),
+                    _geoMasterCmd,
                     "UpdateWebSiteConfig {0} {1} {2} {3}",
                     _sub, _ws, _site, "/scmType:LocalGit");
                 RunAndValidate("ScmType: LocalGit",
                     _blu2Cmd,
                     "GetWebSiteConfig {0} {1} {2}",
                     _sub, _ws, _site);
+
+                // SyncTriggers propagation
+                DeleteTimerTrigger();
+                RunAndValidate("SyncWebSiteTriggers Response: OK",
+                    _geoMasterCmd,
+                    "SyncWebSiteTriggers {0} {1} {2}",
+                    _sub, _ws, _site);
+                RunAndValidate("!\"type\":\"timerTrigger",
+                    _blu2Cmd,
+                    "GetWebSiteTriggers {0} {1} {2}",
+                    _sub, _ws, _site);
+                AddTimerTrigger();
 
                 // Notify free from blu2
                 RunAndValidate("Completed successfully.",
@@ -101,10 +145,14 @@ namespace CrossStampFunctional
                 RunAndValidate("StampName: blu1", _geoRegionCmd, "ListSiteStamps");
                 RunAndValidate("StampName: blu2", _geoRegionCmd, "ListSiteStamps");
                 RunAndValidate(_site, _blu2Cmd, "ListWebSites {0} {1}", _sub, _ws);
+                RunAndValidate("Triggers: [{\"type\":\"",
+                    _blu2Cmd,
+                    "GetWebSiteTriggers {0} {1} {2}",
+                    _sub, _ws, _site);
 
                 // Delete site
-                RunAndValidate(String.Format("Website {0} has been deleted.", _site), 
-                    _geoMasterCmd, 
+                RunAndValidate(String.Format("Website {0} has been deleted.", _site),
+                    _geoMasterCmd,
                     "DeleteWebSite {0} {1} {2}",
                     _sub, _ws, _site);
                 RunAndValidate("![0]", _geoRegionCmd, "ListSiteStamps");
@@ -115,6 +163,77 @@ namespace CrossStampFunctional
             {
                 Console.WriteLine(ex);
             }
+        }
+
+        static bool HasTimerTrigger()
+        {
+            var request = GetTimerTriggerRequest();
+            request.Method = "GET";
+
+            Console.WriteLine();
+            Console.Write(DateTime.Now.ToString("o") + ", HasTimerTrigger ");
+            try
+            {
+                using (var response = (HttpWebResponse)request.GetResponse())
+                {
+                    Console.WriteLine("response " + response.StatusCode);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (ex.Message.Contains("Not Found"))
+                {
+                    Console.WriteLine("response NotFound");
+                    return false;
+                }
+
+                throw;
+            }
+        }
+
+        static void DeleteTimerTrigger()
+        {
+            var request = GetTimerTriggerRequest();
+            request.Method = "DELETE";
+            request.Headers.Add("If-Match", "*");
+
+            Console.WriteLine();
+            Console.Write(DateTime.Now.ToString("o") + ", DeleteTimerTrigger ");
+            using (var response = (HttpWebResponse)request.GetResponse())
+            {
+                Console.WriteLine("response " + response.StatusCode);
+            }
+        }
+
+        static void AddTimerTrigger()
+        {
+            const string TimerTriggerFile = @"\\iisdist\PublicLockBox\Antares\SampleTimerTrigger_function.json";
+
+            var request = GetTimerTriggerRequest();
+            request.Method = "PUT";
+            request.Headers.Add("If-Match", "*");
+            request.ContentType = "application/json";
+
+            Console.WriteLine();
+            Console.Write(DateTime.Now.ToString("o") + ", AddTimerTrigger ");
+            using (var writer = new StreamWriter(request.GetRequestStream()))
+            {
+                writer.Write(File.ReadAllText(TimerTriggerFile));
+            }
+
+            using (var response = (HttpWebResponse)request.GetResponse())
+            {
+                Console.WriteLine("response " + response.StatusCode);
+            }
+        }
+
+        static HttpWebRequest GetTimerTriggerRequest()
+        {
+            var timerTriggerUrl = String.Format("https://{0}.scm.kudu1.antares-test.windows-int.net/vfs/site/wwwroot/SampleTimerTrigger/function.json", _site);
+            var request = (HttpWebRequest)WebRequest.Create(timerTriggerUrl);
+            request.Credentials = new NetworkCredential("auxtm230", "iis6!dfu");
+            return request;
         }
 
         static bool RunAndValidate(string expected, string exe, string format, params object[] args)
