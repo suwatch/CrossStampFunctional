@@ -24,6 +24,8 @@ namespace CrossStampFunctional
         static IList<string> _workers = null;
         static string _publishingUserName = null;
         static string _publishingPassword = null;
+        static string _validationKey = null;
+        static string _decryptionKey = null;
 
         const string _geoMasterCmd = @"c:\temp\geomaster\AntaresCmd.exe";
         const string _geoRegionCmd = @"c:\temp\georegion\AntaresCmd.exe";
@@ -41,6 +43,7 @@ namespace CrossStampFunctional
         {
             try
             {
+                // initially no timer trigger
                 Initialize();
 
                 CreateDummySite();
@@ -129,6 +132,9 @@ namespace CrossStampFunctional
 
             // Get publishing cred
             EnsurePublishingCred();
+
+            // Get MachineKey
+            EnsureMachineKey();
         }
 
         static void EnsurePublishingCred()
@@ -177,6 +183,53 @@ namespace CrossStampFunctional
             }
         }
 
+        static void EnsureMachineKey()
+        {
+            if (_validationKey == null || _decryptionKey == null)
+            {
+                Console.WriteLine(DateTime.Now.ToString("o"));
+                var output = Run(_blu1Cmd, "GetWebSiteConfig {0} {1} {2}", _sub, _ws, _site);
+
+                using (var reader = new StringReader(output))
+                {
+                    string validationKey = null;
+                    string decryptionKey = null;
+                    while (validationKey == null || decryptionKey == null)
+                    {
+                        var line = reader.ReadLine();
+                        if (line == null)
+                        {
+                            break;
+                        }
+
+                        // ValidationKey: 9463CD095F3AA2C2EE0663B102CED9C61B40A06D0C3C4ADDD616AA3EA6614064
+                        // Decryption: AES
+                        // DecryptionKey: 7BE95A7E5B94976384F42C9E9CC34027A7CC00E03C3CC8C960C0D8631412C076
+                        var parts = line.Trim().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                        if (parts.Length == 2)
+                        {
+                            if (parts[0] == "ValidationKey:")
+                            {
+                                validationKey = parts[1];
+                            }
+                            else if (parts[0] == "DecryptionKey:")
+                            {
+                                decryptionKey = parts[1];
+                            }
+                        }
+                    }
+
+                    if (validationKey == null || decryptionKey == null)
+                    {
+                        throw new InvalidOperationException("no publishing cred found.  " + output);
+                    }
+
+                    _validationKey = validationKey;
+                    _decryptionKey = decryptionKey;
+                }
+            }
+        }
+
         static void ValidateTimerTriggerPropagation()
         {
             AddTimerTrigger();
@@ -208,14 +261,26 @@ namespace CrossStampFunctional
                 String.Format("{0}.{1}", _site, _dnsSuffix),
                 HttpStatusCode.NoContent);
             RunAndValidate("State: Stopped", _blu2Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
+
+            // always serve incoming request to slave stamp
             HttpGet(new Uri(String.Format("http://{0}", _blu2HostName)),
                 String.Format("{0}.{1}", _site, _dnsSuffix),
-                HttpStatusCode.Forbidden);
+                HttpStatusCode.NoContent);
 
             // Ensure same publishing cred
             RunAndValidate("PublishingPassword: " + _publishingPassword, 
                 _blu2Cmd, 
                 "GetWebSiteConfig {0} {1} {2}", 
+                _sub, _ws, _site);
+
+            // Ensure same machine key
+            RunAndValidate("ValidationKey: " + _validationKey,
+                _blu2Cmd,
+                "GetWebSiteConfig {0} {1} {2}",
+                _sub, _ws, _site);
+            RunAndValidate("DecryptionKey: " + _decryptionKey,
+                _blu2Cmd,
+                "GetWebSiteConfig {0} {1} {2}",
                 _sub, _ws, _site);
         }
 
@@ -330,12 +395,31 @@ namespace CrossStampFunctional
 
         static void ValidateConfigPropagation()
         {
+            // compensate for clock skew
+            Thread.Sleep(5000);
+
             // UpdateWebSiteConfig propagation
             RunAndValidate(String.Format("Configuration for website {0} has been updated.", _site),
                 _geoMasterCmd,
                 "UpdateWebSiteConfig {0} {1} {2} {3}",
                 _sub, _ws, _site, "/scmType:LocalGit");
             RunAndValidate("ScmType: LocalGit",
+                _blu2Cmd,
+                "GetWebSiteConfig {0} {1} {2}",
+                _sub, _ws, _site);
+
+            // Ensure same publishing cred
+            RunAndValidate("PublishingPassword: " + _publishingPassword,
+                _blu2Cmd,
+                "GetWebSiteConfig {0} {1} {2}",
+                _sub, _ws, _site);
+
+            // Ensure same machine key
+            RunAndValidate("ValidationKey: " + _validationKey,
+                _blu2Cmd,
+                "GetWebSiteConfig {0} {1} {2}",
+                _sub, _ws, _site);
+            RunAndValidate("DecryptionKey: " + _decryptionKey,
                 _blu2Cmd,
                 "GetWebSiteConfig {0} {1} {2}",
                 _sub, _ws, _site);
@@ -359,9 +443,11 @@ namespace CrossStampFunctional
                 HttpStatusCode.NoContent);
 
             RunAndValidate("State: Stopped", _blu2Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
+
+            // always serve incoming request to slave stamp
             HttpGet(new Uri(String.Format("http://{0}", _blu2HostName)),
                 String.Format("{0}.{1}", _site, _dnsSuffix),
-                HttpStatusCode.Forbidden);
+                HttpStatusCode.NoContent);
         }
 
         static void DeleteFunctionSite()
