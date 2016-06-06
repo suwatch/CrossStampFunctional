@@ -396,7 +396,7 @@ namespace CrossStampFunctional
         static void ValidateConfigPropagation()
         {
             // compensate for clock skew
-            Thread.Sleep(5000);
+            Thread.Sleep(60000);
 
             // UpdateWebSiteConfig propagation
             RunAndValidate(String.Format("Configuration for website {0} has been updated.", _site),
@@ -459,7 +459,7 @@ namespace CrossStampFunctional
             RunAndValidate("![0]", _geoRegionCmd, "ListSiteStamps /siteName:{0}", _site);
             RunAndValidate("!" + _site, _geoMasterCmd, "ListWebSites {0} {1}", _sub, _ws);
             RunAndValidate("!" + _site, _blu1Cmd, "ListWebSites {0} {1}", _sub, _ws);
-            RunAndValidate("!" + _site, _blu2Cmd, "ListWebSites {0} {1}", _sub, _ws);
+            RunAndValidate("!" + _site, _blu2Cmd, "ListWebSites {0} {1}", 240, _sub, _ws);
         }
 
         static bool HasTimerTrigger()
@@ -545,6 +545,11 @@ namespace CrossStampFunctional
 
         static bool RunAndValidate(string expected, string exe, string format, params object[] args)
         {
+            return RunAndValidate(expected, exe, 60, format, args);
+        }
+
+        static bool RunAndValidate(string expected, string exe, int numRetries, string format, params object[] args)
+        {
             Console.WriteLine();
             Console.WriteLine("Expected: {0}", expected);
 
@@ -554,7 +559,7 @@ namespace CrossStampFunctional
                 expected = expected.Substring(1);
             }
 
-            for (int i = 0; i < 60; ++i)
+            for (int i = 0; i < numRetries; ++i)
             {
                 Console.WriteLine(DateTime.Now.ToString("o"));
                 var output = Run(exe, format, args);
