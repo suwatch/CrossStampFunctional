@@ -9,6 +9,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using AntaresAzureDNS;
 
 namespace CrossStampFunctional
 {
@@ -38,6 +39,16 @@ namespace CrossStampFunctional
         const string _dnsSuffix = "kudu1.antares-test.windows-int.net";
         const string _blu1HostName = "blu1.api.kudu1.antares-test.windows-int.net";
         const string _blu2HostName = "blu2.api.kudu1.antares-test.windows-int.net";
+        static string _blu1IPAddress;
+        static string _blu2IPAddress;
+
+        const string _clientCertPfxFile = @"\\iisdist\PublicLockBox\Antares\RdfeTestClientCert2016.pfx";
+        const string _clientCertPwdFile = @"\\iisdist\PublicLockBox\Antares\RdfeTestClientCert2016.pfx.txt";
+        const string _clientCertThumbprintFile = @"\\iisdist\PublicLockBox\Antares\RdfeTestClientCert2016.tp.txt";
+        static string _clientCertPwd = File.ReadAllText(_clientCertPwdFile).Trim();
+        static string _clientCertThumbprint = File.ReadAllText(_clientCertThumbprintFile).Trim().ToUpperInvariant();
+
+        static List<Exception> _dnsExceptions = new List<Exception>();
 
         static void Main(string[] args)
         {
@@ -60,6 +71,8 @@ namespace CrossStampFunctional
 
                 ValidateConfigPropagation();
 
+                ValidateCertificatesPropagation();
+
                 ValidateTimerTriggerPropagation();
 
                 NotifyFreeTest();
@@ -67,6 +80,11 @@ namespace CrossStampFunctional
                 NotifyFullTest();
 
                 DeleteFunctionSite();
+
+                foreach (var dnsException in _dnsExceptions)
+                {
+                    Console.WriteLine(dnsException);
+                }
             }
             catch (Exception ex)
             {
@@ -80,12 +98,16 @@ namespace CrossStampFunctional
             _storageAccount = lines[0].Trim();
             _storageKey = lines[1].Trim();
 
+            InitializeStampIPs();
+
             EnableAllWorkers();
+
+            DeleteAllCertificates();
 
             // Reset
             RunAndValidate(String.Empty,
                 _geoMasterCmd,
-                "DeleteWebSite {0} {1} {2} /deleteEmptyServerFarm /skipDnsRegistration",
+                "DeleteWebSite {0} {1} {2} /deleteEmptyServerFarm",
                 _sub, _ws, _site);
             RunAndValidate(String.Empty,
                 _geoMasterCmd,
@@ -97,6 +119,105 @@ namespace CrossStampFunctional
             RunAndValidate("!" + _site, _blu1Cmd, "ListWebSites {0} {1}", _sub, _ws);
             RunAndValidate("!" + _site, _blu2Cmd, "ListWebSites {0} {1}", _sub, _ws);
         }
+
+        static void InitializeStampIPs()
+        {
+            _blu1IPAddress = Dns.GetHostEntry(_blu1HostName).AddressList[0].ToString();
+            _blu2IPAddress = Dns.GetHostEntry(_blu2HostName).AddressList[0].ToString();
+        }
+
+        static void ValidateDnsHostEntry(string hostName, params string[] ipAddresses)
+        {
+            foreach (var ipAddress in ipAddresses)
+            {
+                var success = false;
+                var content = string.Empty;
+                Console.WriteLine();
+                for (int i = 0; i < 24 && !success; ++i)
+                {
+                    Console.WriteLine("ValidateDns: {0}, {1}", hostName, ipAddress);
+                    Console.WriteLine(DateTime.Now.ToString("o"));
+
+                    var addresses = string.Join(",", GetIpAddresses(hostName));
+                    Console.WriteLine("Dns: {0}, {1}", hostName, addresses);
+                    var expect = ipAddress.Trim('!');
+                    success = addresses.Contains(expect) == !ipAddress.StartsWith("!");
+
+                    //var digUrl = string.Format("http://dig.jsondns.org/IN/{0}/A", hostName);
+                    //using (var client = new HttpClient())
+                    //{
+                    //    using (var response = client.GetAsync(digUrl).Result)
+                    //    {
+                    //        content = "Dig status: " + response.StatusCode;
+                    //        Console.WriteLine(content);
+                    //        if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NotFound)
+                    //        {
+                    //            content = response.Content.ReadAsStringAsync().Result;
+                    //            var expect = ipAddress.Trim('!');
+                    //            success = content.Contains("\"" + expect + "\"") == !ipAddress.StartsWith("!");
+                    //        }
+                    //    }
+                    //}
+                }
+
+                if (success)
+                {
+                    Console.WriteLine("Passed.");
+                }
+                else
+                {
+                    try
+                    {
+                        throw new InvalidOperationException(String.Format(DateTime.Now.ToString("o") + ", ValidateDns: {0}, {1}", ipAddress, hostName));
+                    }
+                    catch (Exception ex)
+                    {
+                        _dnsExceptions.Add(ex);      
+                    }
+                }
+            }
+        }
+
+        static string[] GetIpAddresses(string hostName)
+        {
+            var addresses = new List<string>();
+            GetIpAddresses(hostName, addresses);
+            return addresses.ToArray(); 
+        }
+
+        static void GetIpAddresses(string hostName, List<string> addresses)
+        {
+            if (hostName.EndsWith(_dnsSuffix))
+            {
+                foreach (var name in DNSHelper.ListAllCNameRecords(hostName))
+                {
+                    GetIpAddresses(name.TrimEnd('.'), addresses);
+                }
+
+                foreach (var aRecord in DNSHelper.ListAllARecords(hostName))
+                {
+                    addresses.Add(aRecord);
+                }
+            }
+            else
+            {
+                var entry = Dns.GetHostEntry(hostName);
+                addresses.AddRange(entry.AddressList.Select(ip => ip.ToString()));
+            }
+        }
+
+        //static string GetIpAddresses(string hostName)
+        //{
+        //    try
+        //    {
+        //        var entry = Dns.GetHostEntry(hostName);
+        //        return string.Join(",", entry.AddressList.Select(ip => "[" + ip.ToString() + "]"));
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        return ex.Message;
+        //    }
+        //}
 
         static void CreateDummySite()
         {
@@ -115,8 +236,11 @@ namespace CrossStampFunctional
             // CreateFunctionSite
             RunAndValidate(String.Format("{0}.{1}", _site, _dnsSuffix),
                 _geoMasterCmd,
-                "CreateFunctionSite {0} {1} {2} /storageAccount:{3} /storageKey:{4}",
+                "CreateFunctionSite {0} {1} {2} /storageAccount:{3} /storageKey:{4} /appSettings:WEBSITE_LOAD_CERTIFICATES=*",
                 _sub, _ws, _site, _storageAccount, _storageKey);
+
+            ValidateDnsHostEntry(String.Format("{0}.{1}", _site, _dnsSuffix), _blu1IPAddress, "!" + _blu2IPAddress);
+            ValidateDnsHostEntry(String.Format("{0}.scm.{1}", _site, _dnsSuffix), _blu1IPAddress, "!" + _blu2IPAddress);
 
             // initially no timer trigger
             DeleteTimerTrigger();
@@ -221,7 +345,7 @@ namespace CrossStampFunctional
 
                     if (validationKey == null || decryptionKey == null)
                     {
-                        throw new InvalidOperationException("no publishing cred found.  " + output);
+                        throw new InvalidOperationException("no machine key found.  " + output);
                     }
 
                     _validationKey = validationKey;
@@ -391,6 +515,9 @@ namespace CrossStampFunctional
             HttpGet(new Uri(String.Format("http://{0}", _blu2HostName)),
                 String.Format("{0}.{1}", _site, _dnsSuffix),
                 HttpStatusCode.NoContent);
+
+            ValidateDnsHostEntry(String.Format("{0}.{1}", _site, _dnsSuffix), _blu1IPAddress, _blu2IPAddress);
+            ValidateDnsHostEntry(String.Format("{0}.scm.{1}", _site, _dnsSuffix), _blu1IPAddress, "!" + _blu2IPAddress);
         }
 
         static void ValidateConfigPropagation()
@@ -425,6 +552,89 @@ namespace CrossStampFunctional
                 _sub, _ws, _site);
         }
 
+        static void DeleteAllCertificates()
+        {
+            foreach (var thumbprint in GetAllCertificates())
+            {
+                RunAndValidate("Certificate was deleted.",
+                    _geoMasterCmd,
+                    "DeleteCertificate {0} {1} {2}",
+                    _sub, _ws, thumbprint);
+            }
+        }
+
+        static IList<string> GetAllCertificates()
+        {
+            Console.WriteLine(DateTime.Now.ToString("o"));
+            var output = Run(_geoMasterCmd, "GetCertificates {0} {1}", _sub, _ws);
+            var thumbprints = new List<string>();
+            using (var reader = new StringReader(output))
+            {
+                while (true)
+                {
+                    var line = reader.ReadLine();
+                    if (line == null)
+                    {
+                        break;
+                    }
+
+                    var index = line.IndexOf("Thumbprint: ");
+                    if (index >= 0)
+                    {
+                        thumbprints.Add(line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries).Last().Trim());
+                    }
+                }
+            }
+
+            return thumbprints;
+        }
+
+        static void ValidateCertificatesPropagation()
+        {
+            // compensate for clock skew
+            Thread.Sleep(60000);
+
+            // AddCertificates propagation
+            RunAndValidate(String.Format("Certficates were added to the webspace", _site),
+                _geoMasterCmd,
+                "AddCertificates {0} {1} {2} {3}",
+                _sub, _ws, _clientCertPfxFile, _clientCertPwd);
+            RunAndValidate("Thumbprint: " + _clientCertThumbprint,
+                _blu2Cmd,
+                "GetCertificates {0} {1}",
+                _sub, _ws);
+
+            // Hit the site
+            //HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTrigger?name=foo", _blu1HostName)),
+            //    String.Format("{0}.{1}", _site, _dnsSuffix),
+            //    HttpStatusCode.OK,
+            //    expectedContent: _clientCertThumbprint);
+            //HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTrigger?name=foo", _blu2HostName)),
+            //    String.Format("{0}.{1}", _site, _dnsSuffix),
+            //    HttpStatusCode.OK,
+            //    expectedContent: _clientCertThumbprint);
+
+            // DeleteCertificate propagation
+            RunAndValidate("Certificate was deleted.",
+                _geoMasterCmd,
+                "DeleteCertificate {0} {1} {2}",
+                _sub, _ws, _clientCertThumbprint);
+            RunAndValidate("!Thumbprint:",
+                _blu2Cmd,
+                "GetCertificates {0} {1}",
+                _sub, _ws);
+
+            // Hit the site
+            //HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTrigger?name=foo", _blu1HostName)),
+            //    String.Format("{0}.{1}", _site, _dnsSuffix),
+            //    HttpStatusCode.OK,
+            //    expectedContent: "!" + _clientCertThumbprint);
+            //HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTrigger?name=foo", _blu2HostName)),
+            //    String.Format("{0}.{1}", _site, _dnsSuffix),
+            //    HttpStatusCode.OK,
+            //    expectedContent: "!" + _clientCertThumbprint);
+        }
+
         static void NotifyFreeTest()
         {
             // Notify free from blu2
@@ -448,6 +658,9 @@ namespace CrossStampFunctional
             HttpGet(new Uri(String.Format("http://{0}", _blu2HostName)),
                 String.Format("{0}.{1}", _site, _dnsSuffix),
                 HttpStatusCode.NoContent);
+
+            ValidateDnsHostEntry(String.Format("{0}.{1}", _site, _dnsSuffix), _blu1IPAddress, "!" + _blu2IPAddress);
+            ValidateDnsHostEntry(String.Format("{0}.scm.{1}", _site, _dnsSuffix), _blu1IPAddress, "!" + _blu2IPAddress);
         }
 
         static void DeleteFunctionSite()
@@ -459,7 +672,10 @@ namespace CrossStampFunctional
             RunAndValidate("![0]", _geoRegionCmd, "ListSiteStamps /siteName:{0}", _site);
             RunAndValidate("!" + _site, _geoMasterCmd, "ListWebSites {0} {1}", _sub, _ws);
             RunAndValidate("!" + _site, _blu1Cmd, "ListWebSites {0} {1}", _sub, _ws);
-            RunAndValidate("!" + _site, _blu2Cmd, "ListWebSites {0} {1}", 240, _sub, _ws);
+            RunAndValidate("!" + _site, _blu2Cmd, 240, "ListWebSites {0} {1}", _sub, _ws);
+
+            ValidateDnsHostEntry(String.Format("{0}.{1}", _site, _dnsSuffix), "!" + _blu1IPAddress, "!" + _blu2IPAddress);
+            ValidateDnsHostEntry(String.Format("{0}.scm.{1}", _site, _dnsSuffix), "!" + _blu1IPAddress, "!" + _blu2IPAddress);
         }
 
         static bool HasTimerTrigger()
@@ -586,6 +802,12 @@ namespace CrossStampFunctional
                     Console.WriteLine("Must contains " + expected);
                 }
 
+                if ((i + 1) >= numRetries)
+                {
+                    Console.WriteLine(output);
+                    break;
+                }
+
                 Thread.Sleep(1000);
             }
 
@@ -613,7 +835,7 @@ namespace CrossStampFunctional
             while (!proc.StandardOutput.EndOfStream)
             {
                 var line = proc.StandardOutput.ReadLine();
-                Console.WriteLine(line);
+                //Console.WriteLine(line);
                 output.AppendLine(line);
             }
 
@@ -624,7 +846,7 @@ namespace CrossStampFunctional
             return output.ToString();
         }
 
-        static void HttpGet(Uri uri, string host, HttpStatusCode expected, string userName = null, string password = null)
+        static void HttpGet(Uri uri, string host, HttpStatusCode expected, string userName = null, string password = null, string expectedContent = null)
         {
             for (int i = 0; i < 60; ++i)
             {
@@ -644,17 +866,28 @@ namespace CrossStampFunctional
                         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(byteArray));
                     }
 
-                    using (var response = client.GetAsync(uri).Result)
-                    {
-                        if (response.StatusCode == expected)
-                        {
-                            Console.WriteLine("HttpStatus: {0} == {1}", response.StatusCode, expected);
-                            Console.WriteLine("Passed.");
-                            Console.WriteLine();
-                            return;
-                        }
+                    client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(new ProductHeaderValue("CrossStampFunctional", "1.0.0.0")));
 
-                        Console.WriteLine("HttpStatus: {0} != {1}", response.StatusCode, expected);
+                    try
+                    {
+                        using (var response = client.GetAsync(uri).Result)
+                        {
+                            if (response.StatusCode == expected && IsResponseContentMatch(expectedContent, response))
+                            {
+                                Console.WriteLine("HttpStatus: {0} == {1}", response.StatusCode, expected);
+                                Console.WriteLine("Passed.");
+                                Console.WriteLine();
+                                return;
+                            }
+
+                            Console.WriteLine("HttpStatus: {0} != {1}", response.StatusCode, expected);
+                            Console.WriteLine("X-Powered-By: {0}", string.Join("; ", response.Headers.GetValues("X-Powered-By").ToArray()));
+                            Console.WriteLine();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("Exception: {0}", ex);
                         Console.WriteLine();
                     }
                 }
@@ -663,6 +896,30 @@ namespace CrossStampFunctional
             }
 
             throw new InvalidOperationException("Command did not return expected result!");
+        }
+
+        static bool IsResponseContentMatch(string expected, HttpResponseMessage response)
+        {
+            if (String.IsNullOrEmpty(expected))
+            {
+                return true;
+            }
+
+            var negate = expected.StartsWith("!");
+            if (negate)
+            {
+                expected = expected.TrimStart('!');
+            }
+
+            var actual = response.Content.ReadAsStringAsync().Result;
+            if (negate)
+            {
+                return actual.IndexOf(expected, StringComparison.OrdinalIgnoreCase) < 0;
+            }
+            else
+            {
+                return actual.IndexOf(expected, StringComparison.OrdinalIgnoreCase) >= 0;
+            }
         }
     }
 }

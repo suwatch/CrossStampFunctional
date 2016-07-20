@@ -13,7 +13,7 @@
     <FileAlignment>512</FileAlignment>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-    <PlatformTarget>AnyCPU</PlatformTarget>
+    <PlatformTarget>x64</PlatformTarget>
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <Optimize>false</Optimize>
@@ -32,6 +32,15 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="AntaresAzureDNS">
+      <HintPath>..\ref\AntaresAzureDNS.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Web.Hosting.Common">
+      <HintPath>..\ref\Microsoft.Web.Hosting.Common.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Web.Hosting.Tracing">
+      <HintPath>..\ref\Microsoft.Web.Hosting.Tracing.dll</HintPath>
+    </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.Net.Http" />
@@ -40,6 +49,9 @@
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.Data" />
     <Reference Include="System.Xml" />
+    <Reference Include="Wai.Dns">
+      <HintPath>..\ref\Wai.Dns.dll</HintPath>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
