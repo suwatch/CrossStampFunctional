@@ -65,8 +65,6 @@ namespace CrossStampFunctional
 
                 HttpForwardTest();
 
-                // TODO: machine key test
-
                 NotifyFullTest();
 
                 ValidateConfigPropagation();
@@ -85,10 +83,12 @@ namespace CrossStampFunctional
                 {
                     Console.WriteLine(dnsException);
                 }
+
+                Console.WriteLine("All tests passed");
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex);
+                Console.WriteLine("Some tests failed {0}", ex);
             }
         }
 
@@ -143,6 +143,11 @@ namespace CrossStampFunctional
                     var expect = ipAddress.Trim('!');
                     success = addresses.Contains(expect) == !ipAddress.StartsWith("!");
 
+                    if (!success)
+                    {
+                        Thread.Sleep(5000);
+                    }
+
                     //var digUrl = string.Format("http://dig.jsondns.org/IN/{0}/A", hostName);
                     //using (var client = new HttpClient())
                     //{
@@ -162,18 +167,19 @@ namespace CrossStampFunctional
 
                 if (success)
                 {
-                    Console.WriteLine("Passed.");
+                    Console.WriteLine("Passed."); 
                 }
                 else
                 {
-                    try
-                    {
-                        throw new InvalidOperationException(String.Format(DateTime.Now.ToString("o") + ", ValidateDns: {0}, {1}", ipAddress, hostName));
-                    }
-                    catch (Exception ex)
-                    {
-                        _dnsExceptions.Add(ex);      
-                    }
+                    throw new InvalidOperationException(String.Format(DateTime.Now.ToString("o") + ", ValidateDns: {0}, {1}", ipAddress, hostName));
+                    //try
+                    //{
+                    //    throw new InvalidOperationException(String.Format(DateTime.Now.ToString("o") + ", ValidateDns: {0}, {1}", ipAddress, hostName));
+                    //}
+                    //catch (Exception ex)
+                    //{
+                    //    _dnsExceptions.Add(ex);      
+                    //}
                 }
             }
         }
@@ -381,10 +387,12 @@ namespace CrossStampFunctional
             RunAndValidate(_site, _blu2Cmd, "ListWebSites {0} {1}", _sub, _ws);
 
             RunAndValidate("State: Running", _blu1Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
+            RunAndValidate("HomeStamp: " + _blu1, _blu1Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
             HttpGet(new Uri(String.Format("http://{0}", _blu1HostName)),
                 String.Format("{0}.{1}", _site, _dnsSuffix),
                 HttpStatusCode.NoContent);
             RunAndValidate("State: Stopped", _blu2Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
+            RunAndValidate("HomeStamp: " + _blu1, _blu2Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
 
             // always serve incoming request to slave stamp
             HttpGet(new Uri(String.Format("http://{0}", _blu2HostName)),
@@ -550,6 +558,11 @@ namespace CrossStampFunctional
                 _blu2Cmd,
                 "GetWebSiteConfig {0} {1} {2}",
                 _sub, _ws, _site);
+
+
+            RunAndValidate("HomeStamp: " + _blu1, _blu1Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
+
+            RunAndValidate("HomeStamp: " + _blu1, _blu2Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
         }
 
         static void DeleteAllCertificates()
@@ -674,6 +687,9 @@ namespace CrossStampFunctional
             RunAndValidate("!" + _site, _blu1Cmd, "ListWebSites {0} {1}", _sub, _ws);
             RunAndValidate("!" + _site, _blu2Cmd, 240, "ListWebSites {0} {1}", _sub, _ws);
 
+            RunAndValidate(_ws, _blu1Cmd, "ListWebSpaces {0}", _sub);
+            RunAndValidate("!" + _ws, _blu2Cmd, "ListWebSpaces {0}", _sub);
+
             ValidateDnsHostEntry(String.Format("{0}.{1}", _site, _dnsSuffix), "!" + _blu1IPAddress, "!" + _blu2IPAddress);
             ValidateDnsHostEntry(String.Format("{0}.scm.{1}", _site, _dnsSuffix), "!" + _blu1IPAddress, "!" + _blu2IPAddress);
         }
@@ -753,9 +769,10 @@ namespace CrossStampFunctional
 
         static HttpWebRequest GetTimerTriggerRequest()
         {
-            var timerTriggerUrl = String.Format("https://{0}.scm.{1}/vfs/site/wwwroot/SampleTimerTrigger/function.json", _site, _dnsSuffix);
+            var timerTriggerUrl = String.Format("https://{0}/vfs/site/wwwroot/SampleTimerTrigger/function.json", _blu1HostName);
             var request = (HttpWebRequest)WebRequest.Create(timerTriggerUrl);
             request.Credentials = new NetworkCredential("auxtm230", "iis6!dfu");
+            request.Host = String.Format("{0}.scm.{1}", _site, _dnsSuffix);
             return request;
         }
 
@@ -787,7 +804,7 @@ namespace CrossStampFunctional
                         return true;
                     }
                 }
-                else if (output.Contains(expected))
+                else if (output.IndexOf(expected, StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     Console.WriteLine("Passed.");
                     return true;
