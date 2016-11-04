@@ -19,6 +19,8 @@ namespace CrossStampFunctional
         const string _ws = "eastuswebspace";
         const string _dummy = "suwatchet01";
         const string _site = "functionsuw200";
+        const string _siteSlot = "functionslot200";
+        const string _slotName = "Staging";
         const string _sf = "EastUSPlan";
         static string _storageAccount = "";
         static string _storageKey = "";
@@ -42,15 +44,15 @@ namespace CrossStampFunctional
         static string _blu1IPAddress;
         static string _blu2IPAddress;
 
-        const string _clientCertPfxFile = @"\\iisdist\PublicLockBox\Antares\RdfeTestClientCert2016.pfx";
-        const string _clientCertPwdFile = @"\\iisdist\PublicLockBox\Antares\RdfeTestClientCert2016.pfx.txt";
-        const string _clientCertThumbprintFile = @"\\iisdist\PublicLockBox\Antares\RdfeTestClientCert2016.tp.txt";
+        const string _clientCertPfxFile = @"c:\temp\RdfeTestClientCert2016.pfx";
+        const string _clientCertPwdFile = @"c:\temp\RdfeTestClientCert2016.pfx.txt";
+        const string _clientCertThumbprintFile = @"c:\temp\RdfeTestClientCert2016.tp.txt";
         static string _clientCertPwd = File.ReadAllText(_clientCertPwdFile).Trim();
         static string _clientCertThumbprint = File.ReadAllText(_clientCertThumbprintFile).Trim().ToUpperInvariant();
 
-        static List<Exception> _dnsExceptions = new List<Exception>();
+        static int _requestId = 10000000;
 
-        static void Main(string[] args)
+        static int Main(string[] args)
         {
             try
             {
@@ -69,6 +71,8 @@ namespace CrossStampFunctional
 
                 ValidateConfigPropagation();
 
+                ValidateServerFarmPropagation();
+
                 ValidateCertificatesPropagation();
 
                 ValidateTimerTriggerPropagation();
@@ -77,24 +81,29 @@ namespace CrossStampFunctional
 
                 NotifyFullTest();
 
+                SlotCreateFunctionSite();
+
+                SlotSwapTest_1();
+
+                SlotSwapTest_2();
+
                 DeleteFunctionSite();
 
-                foreach (var dnsException in _dnsExceptions)
-                {
-                    Console.WriteLine(dnsException);
-                }
+                Console.WriteLine("{0} Summary results: passed", DateTime.Now.ToString("o"));
 
-                Console.WriteLine("All tests passed");
+                return 0;
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Some tests failed {0}", ex);
+                Console.WriteLine("{0} Summary results: failed {1}", DateTime.Now.ToString("o"), ex);
+
+                return -1;
             }
         }
 
         static void Initialize()
         {
-            var lines = File.ReadAllLines(@"\\iisdist\PublicLockBox\Antares\antfunctions.txt");
+            var lines = File.ReadAllLines(@"c:\temp\antfunctions.txt");
             _storageAccount = lines[0].Trim();
             _storageKey = lines[1].Trim();
 
@@ -107,10 +116,17 @@ namespace CrossStampFunctional
             // Reset
             RunAndValidate(String.Empty,
                 _geoMasterCmd,
-                "DeleteWebSite {0} {1} {2} /deleteEmptyServerFarm",
+                1,
+                "DeleteWebSite {0} {1} {2} /deleteEmptyServerFarm /deleteAllSlots",
+                _sub, _ws, _siteSlot);
+            RunAndValidate(String.Empty,
+                _geoMasterCmd,
+                1,
+                "DeleteWebSite {0} {1} {2} /deleteEmptyServerFarm  /deleteAllSlots",
                 _sub, _ws, _site);
             RunAndValidate(String.Empty,
                 _geoMasterCmd,
+                1,
                 "DeleteWebSite {0} {1} {2}",
                 _sub, _ws, _dummy);
             RunAndValidate("![0]", _geoRegionCmd, "ListSiteStamps /siteName:{0}", _site);
@@ -118,6 +134,14 @@ namespace CrossStampFunctional
             RunAndValidate("!" + _site, _geoMasterCmd, "ListWebSites {0} {1}", _sub, _ws);
             RunAndValidate("!" + _site, _blu1Cmd, "ListWebSites {0} {1}", _sub, _ws);
             RunAndValidate("!" + _site, _blu2Cmd, "ListWebSites {0} {1}", _sub, _ws);
+
+            RunAndValidate("!" + _siteSlot, _geoMasterCmd, "ListWebSites {0} {1}", _sub, _ws);
+            RunAndValidate("!" + _siteSlot, _blu1Cmd, "ListWebSites {0} {1}", _sub, _ws);
+            RunAndValidate("!" + _siteSlot, _blu2Cmd, "ListWebSites {0} {1}", _sub, _ws);
+
+            //RunAndValidate("!" + _sf, _geoMasterCmd, "ListServerFarms {0} {1}", _sub, _ws);
+            //RunAndValidate("!" + _sf, _blu1Cmd, "ListServerFarms {0} {1}", _sub, _ws);
+            //RunAndValidate("!" + _sf, _blu2Cmd, "ListServerFarms {0} {1}", _sub, _ws);
         }
 
         static void InitializeStampIPs()
@@ -230,6 +254,7 @@ namespace CrossStampFunctional
             // Warmup
             RunAndValidate(String.Format("{0}.{1}", _dummy, _dnsSuffix),
                 _geoMasterCmd,
+                1,
                 "CreateWebSite {0} {1} {2}",
                 _sub, _ws, _dummy);
             RunAndValidate(_dummy, _geoMasterCmd, "ListWebSites {0} {1}", _sub, _ws);
@@ -242,20 +267,21 @@ namespace CrossStampFunctional
             // CreateFunctionSite
             RunAndValidate(String.Format("{0}.{1}", _site, _dnsSuffix),
                 _geoMasterCmd,
-                "CreateFunctionSite {0} {1} {2} /storageAccount:{3} /storageKey:{4} /appSettings:WEBSITE_LOAD_CERTIFICATES=*",
+                1,
+                "CreateFunctionSite {0} {1} {2} /storageAccount:{3} /storageKey:{4} /appSettings:WEBSITE_LOAD_CERTIFICATES=*,FUNCTIONS_EXTENSION_VERSION=~0.8",
                 _sub, _ws, _site, _storageAccount, _storageKey);
 
             ValidateDnsHostEntry(String.Format("{0}.{1}", _site, _dnsSuffix), _blu1IPAddress, "!" + _blu2IPAddress);
             ValidateDnsHostEntry(String.Format("{0}.scm.{1}", _site, _dnsSuffix), _blu1IPAddress, "!" + _blu2IPAddress);
 
             // initially no timer trigger
-            DeleteTimerTrigger();
+            RetryHelper(() => DeleteTimerTrigger());
 
             RunAndValidate("SyncWebSiteTriggers Response: OK",
                 _geoMasterCmd,
                 "SyncWebSiteTriggers {0} {1} {2}",
                 _sub, _ws, _site);
-            RunAndValidate("Triggers: [{\"type\":\"",
+            RunAndValidate("Triggers: [{\"",
                 _geoMasterCmd,
                 "GetWebSiteTriggers {0} {1} {2}",
                 _sub, _ws, _site);
@@ -362,7 +388,8 @@ namespace CrossStampFunctional
 
         static void ValidateTimerTriggerPropagation()
         {
-            AddTimerTrigger();
+            // add timer trigger
+            RetryHelper(() => AddTimerTrigger());
 
             RunAndValidate("SyncWebSiteTriggers Response: OK",
                 _geoMasterCmd,
@@ -390,14 +417,14 @@ namespace CrossStampFunctional
             RunAndValidate("HomeStamp: " + _blu1, _blu1Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
             HttpGet(new Uri(String.Format("http://{0}", _blu1HostName)),
                 String.Format("{0}.{1}", _site, _dnsSuffix),
-                HttpStatusCode.NoContent);
+                HttpStatusCode.OK);
             RunAndValidate("State: Stopped", _blu2Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
             RunAndValidate("HomeStamp: " + _blu1, _blu2Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
 
             // always serve incoming request to slave stamp
             HttpGet(new Uri(String.Format("http://{0}", _blu2HostName)),
                 String.Format("{0}.{1}", _site, _dnsSuffix),
-                HttpStatusCode.NoContent);
+                HttpStatusCode.OK);
 
             // Ensure same publishing cred
             RunAndValidate("PublishingPassword: " + _publishingPassword, 
@@ -421,15 +448,16 @@ namespace CrossStampFunctional
             DisableAllWorkers();
 
             // wait for host cache to stale
-            Thread.Sleep(30000);
+            Console.WriteLine("{0} Sleep 60s", DateTime.Now.ToString("o"));
+            Thread.Sleep(60000);
 
             HttpGet(new Uri(String.Format("http://{0}.{1}", _site, _dnsSuffix)),
                 null,
-                HttpStatusCode.NoContent);
+                HttpStatusCode.OK);
 
             HttpGet(new Uri(String.Format("https://{0}.{1}", _site, _dnsSuffix)),
                 null,
-                HttpStatusCode.NoContent);
+                HttpStatusCode.OK);
 
             HttpGet(new Uri(String.Format("http://{0}.scm.{1}", _site, _dnsSuffix)),
                 null,
@@ -445,7 +473,25 @@ namespace CrossStampFunctional
                 _publishingUserName,
                 _publishingPassword);
 
+            // http forward should lead to notifyfull
+            RunAndValidate("!Idle: True", _geoRegionCmd, "ListSiteStamps /siteName:{0}", _site);
+            RunAndValidate("State: Running", _blu2Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
+
             EnableAllWorkers();
+
+            // slave should scale back
+            // TODO, suwatch: flaky
+            // HACK HACK
+            // wait for Notify Full to stale
+            Console.WriteLine("{0} Sleep 300s", DateTime.Now.ToString("o"));
+            Thread.Sleep(300000);
+            RunAndValidate("Completed successfully.",
+                _geoRegionCmd,
+                "Notify {0} {1} {2} {3} {4} {5}",
+                _blu2, _free, _sub, _ws, _site, _sf);
+
+            RunAndValidate("Idle: True", _geoRegionCmd, 120, "ListSiteStamps /siteName:{0}", _site);
+            RunAndValidate("State: Stopped", _blu2Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
         }
 
         static void DisableAllWorkers()
@@ -454,6 +500,8 @@ namespace CrossStampFunctional
             {
                 SetWorkerState(worker, enabled: false);
             }
+
+            CheckCapacity(_blu1Cmd, hasCapacity: false);
         }
 
         static void EnableAllWorkers()
@@ -462,6 +510,8 @@ namespace CrossStampFunctional
             {
                 SetWorkerState(worker, enabled: true);
             }
+
+            CheckCapacity(_blu1Cmd, hasCapacity: true);
         }
 
         static void SetWorkerState(string worker, bool enabled)
@@ -507,8 +557,224 @@ namespace CrossStampFunctional
             return _workers;
         }
 
+        static void SlotCreateFunctionSite()
+        {
+            // CreateFunctionSite and slot
+            RunAndValidate(String.Format("{0}.{1}", _siteSlot, _dnsSuffix),
+                _geoMasterCmd,
+                1,
+                "CreateFunctionSite {0} {1} {2} /storageAccount:{3} /storageKey:{4} /appSettings:WEBSITE_LOAD_CERTIFICATES=*,FUNCTIONS_EXTENSION_VERSION=~0.8",
+                _sub, _ws, _siteSlot, _storageAccount, _storageKey);
+            RunAndValidate(String.Format("{0}-{1}.{2}", _siteSlot, _slotName.ToLowerInvariant(), _dnsSuffix),
+                _geoMasterCmd,
+                1,
+                "CreateWebSiteSlot {0} {1} {2} {3}",
+                _sub, _ws, _siteSlot, _slotName);
+
+            // pushing trigger
+            RunAndValidate("SyncWebSiteTriggers Response: OK",
+                _geoMasterCmd,
+                "SyncWebSiteTriggers {0} {1} {2}",
+                _sub, _ws, _siteSlot);
+            RunAndValidate("CSharpHttpTriggerProduction",
+                _geoMasterCmd,
+                "GetWebSiteTriggers {0} {1} {2}",
+                _sub, _ws, _siteSlot);
+
+            RunAndValidate("SyncWebSiteTriggers Response: OK",
+                _geoMasterCmd,
+                "SyncWebSiteTriggers {0} {1} {2}({3})",
+                _sub, _ws, _siteSlot, _slotName);
+            RunAndValidate("CSharpHttpTriggerStaging",
+                _geoMasterCmd,
+                "GetWebSiteTriggers {0} {1} {2}({3})",
+                _sub, _ws, _siteSlot, _slotName);
+
+
+            // Propagate
+            SlotValidateHotBackup();
+
+            // HttpGet Production
+            HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTriggerProduction?name=foo", _blu1HostName)),
+                String.Format("{0}.{1}", _siteSlot, _dnsSuffix),
+                HttpStatusCode.OK,
+                expectedContent: _siteSlot + "(Production)");
+            HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTriggerProduction?name=foo", _blu2HostName)),
+                String.Format("{0}.{1}", _siteSlot, _dnsSuffix),
+                HttpStatusCode.OK,
+                expectedContent: _siteSlot + "(Production)");
+
+            // HttpGet Staging
+            HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTriggerStaging?name=foo", _blu1HostName)),
+                String.Format("{0}-{1}.{2}", _siteSlot, _slotName.ToLowerInvariant(), _dnsSuffix),
+                HttpStatusCode.OK,
+                expectedContent: _siteSlot + "(Staging)");
+            HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTriggerStaging?name=foo", _blu2HostName)),
+                String.Format("{0}-{1}.{2}", _siteSlot, _slotName.ToLowerInvariant(), _dnsSuffix),
+                HttpStatusCode.NotFound);
+        }
+
+        static void SlotValidateHotBackup()
+        {
+            // Check if hot back up Production
+            RunAndValidate("StampName: " + _blu1, _geoRegionCmd, "ListSiteStamps /siteName:{0}", _siteSlot);
+            RunAndValidate("StampName: " + _blu2, _geoRegionCmd, "ListSiteStamps /siteName:{0}", _siteSlot);
+            RunAndValidate("Idle: True", _geoRegionCmd, "ListSiteStamps /siteName:{0}", _siteSlot);
+            RunAndValidate(_siteSlot, _blu2Cmd, "ListWebSites {0} {1}", _sub, _ws);
+
+            RunAndValidate("State: Running", _blu1Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _siteSlot);
+            RunAndValidate("HomeStamp: " + _blu1, _blu1Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _siteSlot);
+            HttpGet(new Uri(String.Format("http://{0}", _blu1HostName)),
+                String.Format("{0}.{1}", _siteSlot, _dnsSuffix),
+                HttpStatusCode.OK);
+            RunAndValidate("State: Stopped", _blu2Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _siteSlot);
+            RunAndValidate("HomeStamp: " + _blu1, _blu2Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _siteSlot);
+
+            // Check if hot back up Staging
+            RunAndValidate("!StampName: " + _blu1, _geoRegionCmd, "ListSiteStamps /siteName:{0}-{1}", _siteSlot, _slotName.ToLowerInvariant());
+            RunAndValidate("!StampName: " + _blu2, _geoRegionCmd, "ListSiteStamps /siteName:{0}-{1}", _siteSlot, _slotName.ToLowerInvariant());
+
+            RunAndValidate("State: Running", _blu1Cmd, "GetWebSite {0} {1} {2}({3})", _sub, _ws, _siteSlot, _slotName.ToLowerInvariant());
+            RunAndValidate("HomeStamp: " + _blu1, _blu1Cmd, "GetWebSite {0} {1} {2}({3})", _sub, _ws, _siteSlot, _slotName.ToLowerInvariant());
+            RunAndValidate("(404) Not Found", _blu2Cmd, "GetWebSite {0} {1} {2}({3})", _sub, _ws, _siteSlot, _slotName.ToLowerInvariant());
+
+            // ensure trigger propagation
+            RunAndValidate("CSharpHttpTriggerProduction",
+                _blu2Cmd,
+                "GetWebSiteTriggers {0} {1} {2}",
+                _sub, _ws, _siteSlot);
+        }
+
+        static void SlotSwapTest_1()
+        {
+            SwapSiteSlots();
+
+            // Trigger has swap
+            RunAndValidate("CSharpHttpTriggerStaging",
+                _geoMasterCmd,
+                "GetWebSiteTriggers {0} {1} {2}",
+                _sub, _ws, _siteSlot);
+            RunAndValidate("CSharpHttpTriggerProduction",
+                _geoMasterCmd,
+                "GetWebSiteTriggers {0} {1} {2}({3})",
+                _sub, _ws, _siteSlot, _slotName);
+
+            // ensure trigger propagation
+            RunAndValidate("CSharpHttpTriggerStaging",
+                _blu2Cmd,
+                "GetWebSiteTriggers {0} {1} {2}",
+                _sub, _ws, _siteSlot);
+
+            // HttpGet Production
+            HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTriggerStaging?name=foo", _blu1HostName)),
+                String.Format("{0}.{1}", _siteSlot, _dnsSuffix),
+                HttpStatusCode.OK,
+                expectedContent: _siteSlot + "(Staging)");
+            HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTriggerStaging?name=foo", _blu2HostName)),
+                String.Format("{0}.{1}", _siteSlot, _dnsSuffix),
+                HttpStatusCode.OK,
+                expectedContent: _siteSlot + "(Staging)");
+
+            // HttpGet Staging
+            HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTriggerProduction?name=foo", _blu1HostName)),
+                String.Format("{0}-{1}.{2}", _siteSlot, _slotName.ToLowerInvariant(), _dnsSuffix),
+                HttpStatusCode.OK,
+                expectedContent: _siteSlot + "(Production)");
+            HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTriggerProduction?name=foo", _blu2HostName)),
+                String.Format("{0}-{1}.{2}", _siteSlot, _slotName.ToLowerInvariant(), _dnsSuffix),
+                HttpStatusCode.NotFound);
+        }
+
+        static void SlotSwapTest_2()
+        {
+            SwapSiteSlots();
+
+            // Trigger has swap
+            RunAndValidate("CSharpHttpTriggerProduction",
+                _geoMasterCmd,
+                "GetWebSiteTriggers {0} {1} {2}",
+                _sub, _ws, _siteSlot);
+            RunAndValidate("CSharpHttpTriggerStaging",
+                _geoMasterCmd,
+                "GetWebSiteTriggers {0} {1} {2}({3})",
+                _sub, _ws, _siteSlot, _slotName);
+
+            // ensure trigger propagation
+            RunAndValidate("CSharpHttpTriggerProduction",
+                _blu2Cmd,
+                "GetWebSiteTriggers {0} {1} {2}",
+                _sub, _ws, _siteSlot);
+
+            // HttpGet Production
+            HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTriggerProduction?name=foo", _blu1HostName)),
+                String.Format("{0}.{1}", _siteSlot, _dnsSuffix),
+                HttpStatusCode.OK,
+                expectedContent: _siteSlot + "(Production)");
+            HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTriggerProduction?name=foo", _blu2HostName)),
+                String.Format("{0}.{1}", _siteSlot, _dnsSuffix),
+                HttpStatusCode.OK,
+                expectedContent: _siteSlot + "(Production)");
+
+            // HttpGet Staging
+            HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTriggerStaging?name=foo", _blu1HostName)),
+                String.Format("{0}-{1}.{2}", _siteSlot, _slotName.ToLowerInvariant(), _dnsSuffix),
+                HttpStatusCode.OK,
+                expectedContent: _siteSlot + "(Staging)");
+            HttpGet(new Uri(String.Format("http://{0}/api/CSharpHttpTriggerStaging?name=foo", _blu2HostName)),
+                String.Format("{0}-{1}.{2}", _siteSlot, _slotName.ToLowerInvariant(), _dnsSuffix),
+                HttpStatusCode.NotFound);
+        }
+
+        static void SwapSiteSlots()
+        {
+            Console.WriteLine(DateTime.Now.ToString("o"));
+
+            //RequestID = 3dc25123-0e04-4674-932e-994d74f2a642, request created at 2016-09-26T05:37:54.5169457Z
+            //Request to swap site slot 'functionslot200' with slot 'Staging' has been submitted.
+            //Use the command below to get the status of the request:
+            //AntaresCmd.exe GetWebSiteOperation 00e7bb72-7725-4249-8e6b-0d2632b3bfc1 eastuswebspace functionslot200
+            //df6eb4ec-3ebd-407c-a534-03b8e54565cb
+            var output = Run(_geoMasterCmd, "SwapWebSiteSlots {0} {1} {2} {3}", _sub, _ws, _siteSlot, _slotName);
+            var success = false;
+            var operationCmd = string.Empty;
+            using (var reader = new StringReader(output))
+            {
+                while (string.IsNullOrEmpty(operationCmd))
+                {
+                    var line = reader.ReadLine();
+                    if (line == null)
+                        break;
+
+                    if (success)
+                    {
+                        if (line.Trim().StartsWith("AntaresCmd.exe GetWebSiteOperation "))
+                        {
+                            operationCmd = line.Trim();
+                            break;
+                        }
+                        continue;
+                    }
+
+                    success = line.Contains(string.Format("Request to swap site slot '{0}' with slot '{1}' has been submitted", _siteSlot, _slotName));
+                }
+            }
+
+            if (!success || string.IsNullOrEmpty(operationCmd))
+            {
+                throw new InvalidOperationException("Fail SwapSiteSlots\r\n" + output);
+            }
+
+            RunAndValidate("Status: Succeeded",
+                _geoMasterCmd,
+                operationCmd.Replace("AntaresCmd.exe ", string.Empty));
+        }
+
         static void NotifyFullTest()
         {
+            // ensure capacities
+            CheckCapacity(_blu1Cmd, hasCapacity: true);
+            CheckCapacity(_blu2Cmd, hasCapacity: true);
+
             // Notify full
             RunAndValidate("Completed successfully.",
                 _geoRegionCmd,
@@ -520,17 +786,38 @@ namespace CrossStampFunctional
 
             RunAndValidate("!Idle: True", _geoRegionCmd, "ListSiteStamps /siteName:{0}", _site);
             RunAndValidate("State: Running", _blu2Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
-            HttpGet(new Uri(String.Format("http://{0}", _blu2HostName)),
-                String.Format("{0}.{1}", _site, _dnsSuffix),
-                HttpStatusCode.NoContent);
 
             ValidateDnsHostEntry(String.Format("{0}.{1}", _site, _dnsSuffix), _blu1IPAddress, _blu2IPAddress);
             ValidateDnsHostEntry(String.Format("{0}.scm.{1}", _site, _dnsSuffix), _blu1IPAddress, "!" + _blu2IPAddress);
+
+            HttpGet(new Uri(String.Format("http://{0}", _blu2HostName)),
+                String.Format("{0}.{1}", _site, _dnsSuffix),
+                HttpStatusCode.OK);
+        }
+
+        static void CheckCapacity(string antaresCmd, bool hasCapacity)
+        {
+            RunAndValidate("Size: 1536, Available: ",
+                antaresCmd,
+                "GetDynamicSkuContainerCapacities");
+            if (hasCapacity)
+            {
+                RunAndValidate("!Size: 1536, Available: 0",
+                    antaresCmd,
+                    "GetDynamicSkuContainerCapacities");
+            }
+            else
+            {
+                RunAndValidate("Size: 1536, Available: 0",
+                    antaresCmd,
+                    "GetDynamicSkuContainerCapacities");
+            }
         }
 
         static void ValidateConfigPropagation()
         {
             // compensate for clock skew
+            Console.WriteLine("{0} Sleep 60s", DateTime.Now.ToString("o"));
             Thread.Sleep(60000);
 
             // UpdateWebSiteConfig propagation
@@ -563,6 +850,88 @@ namespace CrossStampFunctional
             RunAndValidate("HomeStamp: " + _blu1, _blu1Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
 
             RunAndValidate("HomeStamp: " + _blu1, _blu2Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
+        }
+
+        static void ValidateServerFarmPropagation()
+        {
+            // compensate for clock skew
+            Console.WriteLine("{0} Sleep 60s", DateTime.Now.ToString("o"));
+            Thread.Sleep(60000);
+
+            var lastModifiedTime1 = GetServerFarmLastModifiedTime(_geoMasterCmd);
+            var lastModifiedTime2 = GetServerFarmLastModifiedTime(_blu2Cmd);
+
+            if (lastModifiedTime1 > lastModifiedTime2)
+            {
+                throw new InvalidOperationException(lastModifiedTime1 + " > " + lastModifiedTime2);
+            }
+
+            // UpdateServerFarm propagation
+            RunAndValidate(String.Format("Server farm {0} has been updated.", _sf),
+                _geoMasterCmd,
+                "UpdateServerFarm {0} {1} {2} Dynamic /workerSize:0",
+                _sub, _ws, _sf);
+
+            var lastModifiedTime = GetServerFarmLastModifiedTime(_geoMasterCmd);
+            if (lastModifiedTime1 > lastModifiedTime)
+            {
+                throw new InvalidOperationException(lastModifiedTime1 + " > " + lastModifiedTime);
+            }
+            if (lastModifiedTime2 > lastModifiedTime)
+            {
+                throw new InvalidOperationException(lastModifiedTime2 + " > " + lastModifiedTime);
+            }
+
+            lastModifiedTime1 = lastModifiedTime;
+            lastModifiedTime = lastModifiedTime2;
+
+            for (int i = 24; lastModifiedTime == lastModifiedTime2; --i)
+            {
+                if (i <= 0)
+                {
+                    throw new InvalidOperationException("Timeout waiting for serverFarm change");
+                }
+
+                Thread.Sleep(5000);
+
+                lastModifiedTime = GetServerFarmLastModifiedTime(_blu2Cmd);
+            }
+
+            if (lastModifiedTime1 > lastModifiedTime)
+            {
+                throw new InvalidOperationException(lastModifiedTime1 + " > " + lastModifiedTime);
+            }
+            if (lastModifiedTime2 > lastModifiedTime)
+            {
+                throw new InvalidOperationException(lastModifiedTime2 + " > " + lastModifiedTime);
+            }
+        }
+
+        static DateTime GetServerFarmLastModifiedTime(string cmd)
+        {
+            Console.WriteLine(DateTime.Now.ToString("o"));
+            var output = Run(cmd, "GetServerFarm {0} {1} {2}", _sub, _ws, _sf);
+
+            using (var reader = new StringReader(output))
+            {
+                while (true)
+                {
+                    var line = reader.ReadLine();
+                    if (line == null)
+                    {
+                        break;
+                    }
+
+                    // LastModifiedTimeUtc: 8/31/2016 9:23:38 PM
+                    var parts = line.Trim().Split(new[] { ':' }, 2, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length == 2 && parts[0] == "LastModifiedTimeUtc")
+                    {
+                        return DateTime.Parse(parts[1].Trim()).ToLocalTime();
+                    }
+                }
+            }
+
+            throw new InvalidOperationException(output);
         }
 
         static void DeleteAllCertificates()
@@ -605,6 +974,7 @@ namespace CrossStampFunctional
         static void ValidateCertificatesPropagation()
         {
             // compensate for clock skew
+            Console.WriteLine("{0} Sleep 60s", DateTime.Now.ToString("o"));
             Thread.Sleep(60000);
 
             // AddCertificates propagation
@@ -663,14 +1033,14 @@ namespace CrossStampFunctional
             RunAndValidate("State: Running", _blu1Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
             HttpGet(new Uri(String.Format("http://{0}", _blu1HostName)),
                 String.Format("{0}.{1}", _site, _dnsSuffix),
-                HttpStatusCode.NoContent);
+                HttpStatusCode.OK);
 
             RunAndValidate("State: Stopped", _blu2Cmd, "GetWebSite {0} {1} {2}", _sub, _ws, _site);
 
             // always serve incoming request to slave stamp
             HttpGet(new Uri(String.Format("http://{0}", _blu2HostName)),
                 String.Format("{0}.{1}", _site, _dnsSuffix),
-                HttpStatusCode.NoContent);
+                HttpStatusCode.OK);
 
             ValidateDnsHostEntry(String.Format("{0}.{1}", _site, _dnsSuffix), _blu1IPAddress, "!" + _blu2IPAddress);
             ValidateDnsHostEntry(String.Format("{0}.scm.{1}", _site, _dnsSuffix), _blu1IPAddress, "!" + _blu2IPAddress);
@@ -680,12 +1050,24 @@ namespace CrossStampFunctional
         {
             RunAndValidate(String.Empty,
                 _geoMasterCmd,
-                "DeleteWebSite {0} {1} {2}",
+                1,
+                "DeleteWebSite {0} {1} {2} /deleteEmptyServerFarm /deleteAllSlots",
+                _sub, _ws, _siteSlot);
+            RunAndValidate(String.Empty,
+                _geoMasterCmd,
+                1,
+                "DeleteWebSite {0} {1} {2} /deleteEmptyServerFarm  /deleteAllSlots",
                 _sub, _ws, _site);
+
             RunAndValidate("![0]", _geoRegionCmd, "ListSiteStamps /siteName:{0}", _site);
             RunAndValidate("!" + _site, _geoMasterCmd, "ListWebSites {0} {1}", _sub, _ws);
             RunAndValidate("!" + _site, _blu1Cmd, "ListWebSites {0} {1}", _sub, _ws);
             RunAndValidate("!" + _site, _blu2Cmd, 240, "ListWebSites {0} {1}", _sub, _ws);
+
+            RunAndValidate("![0]", _geoRegionCmd, "ListSiteStamps /siteName:{0}", _siteSlot);
+            RunAndValidate("!" + _siteSlot, _geoMasterCmd, "ListWebSites {0} {1}", _sub, _ws);
+            RunAndValidate("!" + _siteSlot, _blu1Cmd, "ListWebSites {0} {1}", _sub, _ws);
+            RunAndValidate("!" + _siteSlot, _blu2Cmd, 240, "ListWebSites {0} {1}", _sub, _ws);
 
             RunAndValidate(_ws, _blu1Cmd, "ListWebSpaces {0}", _sub);
             RunAndValidate("!" + _ws, _blu2Cmd, "ListWebSpaces {0}", _sub);
@@ -698,9 +1080,12 @@ namespace CrossStampFunctional
         {
             var request = GetTimerTriggerRequest();
             request.Method = "GET";
+            var requestId = Guid.Empty.ToString().Replace("00000000-", Interlocked.Increment(ref _requestId) + "-");
+            request.Headers.Add("x-ms-request-id", requestId);
 
             Console.WriteLine();
             Console.Write(DateTime.Now.ToString("o") + ", HasTimerTrigger ");
+            Console.Write("x-ms-request-id: " + requestId + " ");
             try
             {
                 using (var response = (HttpWebResponse)request.GetResponse())
@@ -726,9 +1111,12 @@ namespace CrossStampFunctional
             var request = GetTimerTriggerRequest();
             request.Method = "DELETE";
             request.Headers.Add("If-Match", "*");
+            var requestId = Guid.Empty.ToString().Replace("00000000-", Interlocked.Increment(ref _requestId) + "-");
+            request.Headers.Add("x-ms-request-id", requestId);
 
             Console.WriteLine();
             Console.Write(DateTime.Now.ToString("o") + ", DeleteTimerTrigger ");
+            Console.Write("x-ms-request-id: " + requestId + " ");
             try
             {
                 using (var response = (HttpWebResponse)request.GetResponse())
@@ -745,17 +1133,41 @@ namespace CrossStampFunctional
             }
         }
 
+        static void RetryHelper(Action action)
+        {
+            int max = 5;
+            while (true)
+            {
+                try
+                {
+                    action();
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(ex);
+                    if (max-- < 0)
+                        throw;
+                }
+
+                Thread.Sleep(5000);
+            }
+        }
+
         static void AddTimerTrigger()
         {
-            const string TimerTriggerFile = @"\\iisdist\PublicLockBox\Antares\SampleTimerTrigger_function.json";
+            const string TimerTriggerFile = @"c:\temp\SampleTimerTrigger_function.json";
 
             var request = GetTimerTriggerRequest();
             request.Method = "PUT";
             request.Headers.Add("If-Match", "*");
             request.ContentType = "application/json";
+            var requestId = Guid.Empty.ToString().Replace("00000000-", Interlocked.Increment(ref _requestId) + "-");
+            request.Headers.Add("x-ms-request-id", requestId);
 
             Console.WriteLine();
             Console.Write(DateTime.Now.ToString("o") + ", AddTimerTrigger ");
+            Console.Write("x-ms-request-id: " + requestId + " ");
             using (var writer = new StreamWriter(request.GetRequestStream()))
             {
                 writer.Write(File.ReadAllText(TimerTriggerFile));
@@ -773,6 +1185,8 @@ namespace CrossStampFunctional
             var request = (HttpWebRequest)WebRequest.Create(timerTriggerUrl);
             request.Credentials = new NetworkCredential("auxtm230", "iis6!dfu");
             request.Host = String.Format("{0}.scm.{1}", _site, _dnsSuffix);
+            request.UserAgent = "CrossStampFunctional/0.0.0.0";
+
             return request;
         }
 
@@ -867,15 +1281,19 @@ namespace CrossStampFunctional
         {
             for (int i = 0; i < 60; ++i)
             {
+                var requestId = Guid.Empty.ToString().Replace("00000000-", Interlocked.Increment(ref _requestId) + "-");
                 Console.WriteLine(DateTime.Now.ToString("o"));
                 Console.WriteLine("HttpGet: {0}", uri);
                 Console.WriteLine("Host: {0}", host);
+                Console.WriteLine("x-ms-request-id: {0}", requestId);
                 using (var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }))
                 {
                     if (host != null)
                     {
                         client.DefaultRequestHeaders.Host = host;
                     }
+
+                    client.DefaultRequestHeaders.Add("x-ms-request-id", requestId);
 
                     if (userName != null && password != null)
                     {
@@ -887,8 +1305,10 @@ namespace CrossStampFunctional
 
                     try
                     {
+                        var now = DateTime.UtcNow;
                         using (var response = client.GetAsync(uri).Result)
                         {
+                            Console.WriteLine("Latency: {0} ms", (int)(DateTime.UtcNow - now).TotalMilliseconds);
                             if (response.StatusCode == expected && IsResponseContentMatch(expectedContent, response))
                             {
                                 Console.WriteLine("HttpStatus: {0} == {1}", response.StatusCode, expected);
@@ -897,8 +1317,25 @@ namespace CrossStampFunctional
                                 return;
                             }
 
-                            Console.WriteLine("HttpStatus: {0} != {1}", response.StatusCode, expected);
-                            Console.WriteLine("X-Powered-By: {0}", string.Join("; ", response.Headers.GetValues("X-Powered-By").ToArray()));
+                            if (response.StatusCode != expected)
+                            {
+                                Console.WriteLine("HttpStatus: {0} != {1}", response.StatusCode, expected);
+                            }
+                            else
+                            {
+                                Console.WriteLine("Content Not Match: {0}", expectedContent);
+                            }
+
+                            IEnumerable<string> poweredBys;
+                            if (response.Headers.TryGetValues("X-Powered-By", out poweredBys))
+                            {
+                                Console.WriteLine("X-Powered-By: {0}", string.Join("; ", poweredBys));
+                            }
+                            else
+                            {
+                                Console.WriteLine("No X-Powered-By header!");
+                            }
+
                             Console.WriteLine();
                         }
                     }
@@ -909,7 +1346,7 @@ namespace CrossStampFunctional
                     }
                 }
 
-                Thread.Sleep(1000);
+                Thread.Sleep(5000);
             }
 
             throw new InvalidOperationException("Command did not return expected result!");
